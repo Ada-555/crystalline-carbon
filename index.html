@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crystalline Carbon — Diamond Lattice Experience</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: 'JetBrains Mono', monospace; }
+        #canvas { width: 100vw; height: 100vh; display: block; }
+        
+        #ui {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 100;
+        }
+        
+        #header {
+            position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
+            text-align: center;
+        }
+        
+        #title {
+            font-size: 11px; letter-spacing: 10px; color: #fff;
+            text-transform: uppercase; margin-bottom: 10px;
+            text-shadow: 0 0 30px rgba(255,255,255,0.5);
+        }
+        
+        #subtitle {
+            font-size: 9px; letter-spacing: 4px; color: rgba(255,255,255,0.4);
+            text-transform: uppercase;
+        }
+        
+        #state-display {
+            position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+            text-align: center;
+        }
+        
+        #state-label {
+            font-size: 9px; letter-spacing: 3px; color: rgba(255,255,255,0.4);
+            text-transform: uppercase; margin-bottom: 8px;
+        }
+        
+        #state-name {
+            font-size: 16px; letter-spacing: 8px; color: #fff;
+            text-transform: uppercase; transition: all 0.5s;
+            text-shadow: 0 0 20px rgba(255,255,255,0.8);
+        }
+        
+        #state-name.diamond {
+            background: linear-gradient(90deg, #ff6b6b, #ffd93d, #6bff6b, #6bdfff, #d96bff, #ff6b6b);
+            background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            animation: rainbow 3s linear infinite;
+        }
+        
+        @keyframes rainbow { to { background-position: 200% center; } }
+        
+        #instructions {
+            position: absolute; bottom: 50px; right: 50px; text-align: right;
+        }
+        
+        #instructions p {
+            font-size: 8px; letter-spacing: 2px; color: rgba(255,255,255,0.3);
+            text-transform: uppercase; margin-bottom: 4px;
+        }
+        
+        #progress-bar {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+            width: 300px; height: 2px; background: rgba(255,255,255,0.1);
+        }
+        
+        #progress-fill {
+            height: 100%; background: linear-gradient(90deg, #ff6b6b, #ffd93d, #6bff6b, #6bdfff, #d96bff);
+            background-size: 300% auto; transition: width 0.1s;
+            animation: rainbow 2s linear infinite;
+        }
+        
+        #loading {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; align-items: center; justify-content: center;
+            z-index: 1000; transition: opacity 1s;
+        }
+        
+        #loading.hidden { opacity: 0; pointer-events: none; }
+        
+        #loading-text {
+            font-size: 10px; letter-spacing: 8px; color: #fff;
+            text-transform: uppercase; animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+        
+        #vignette {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 50;
+            background: radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.7) 100%);
+        }
+        
+        #godrays {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 49; opacity: 0.15;
+            background: radial-gradient(ellipse at 50% 50%, rgba(255,255,255,0.3) 0%, transparent 60%);
+        }
+    </style>
+</head>
+<body>
+    <div id="loading"><div id="loading-text">Initializing Carbon</div></div>
+    <canvas id="canvas"></canvas>
+    <div id="godrays"></div>
+    <div id="vignette"></div>
+    
+    <div id="ui">
+        <div id="header">
+            <div id="title">Crystalline Carbon</div>
+            <div id="subtitle">Diamond Lattice Visualization</div>
+        </div>
+        
+        <div id="progress-bar"><div id="progress-fill" style="width: 0%"></div></div>
+        
+        <div id="state-display">
+            <div id="state-label">Current State</div>
+            <div id="state-name">ATOMIC</div>
+        </div>
+        
+        <div id="instructions">
+            <p>Scroll to crystallize</p>
+            <p>Drag to orbit</p>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+        import { GammaCorrectionShader } from 'three/addons/shaders/GammaCorrectionShader.js';
+
+        // State machine
+        let morphProgress = 0; // 0 = ATOMIC, 1 = DIAMOND
+        let targetMorph = 0;
+
+        // Scene setup
+        const canvas = document.getElementById('canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.5;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 12);
+
+        // Controls
+        const controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minDistance = 5;
+        controls.maxDistance = 25;
+
+        // Post-processing
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            2.0, 0.5, 0.85
+        );
+        composer.addPass(bloomPass);
+        composer.addPass(new ShaderPass(GammaCorrectionShader));
+
+        // Lighting
+        const ambient = new THREE.AmbientLight(0x111111, 0.5);
+        scene.add(ambient);
+
+        const spot1 = new THREE.SpotLight(0xffffff, 50);
+        spot1.position.set(10, 10, 10);
+        spot1.angle = 0.3;
+        spot1.penumbra = 0.5;
+        scene.add(spot1);
+
+        const spot2 = new THREE.SpotLight(0x88ccff, 30);
+        spot2.position.set(-8, -5, 5);
+        spot2.angle = 0.4;
+        spot2.penumbra = 0.6;
+        scene.add(spot2);
+
+        const spot3 = new THREE.SpotLight(0xffd700, 20);
+        spot3.position.set(0, -10, 8);
+        spot3.angle = 0.5;
+        scene.add(spot3);
+
+        // Diamond material with chromatic dispersion
+        const diamondMaterialR = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            metalness: 0,
+            roughness: 0,
+            transmission: 1,
+            thickness: 1.5,
+            ior: 2.417,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const diamondMaterialG = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            metalness: 0,
+            roughness: 0,
+            transmission: 1,
+            thickness: 1.5,
+            ior: 2.42,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const diamondMaterialB = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            metalness: 0,
+            roughness: 0,
+            transmission: 1,
+            thickness: 1.5,
+            ior: 2.425,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        // Nuclei material (glowing cores)
+        const nucleiMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            emissive: 0xffffff,
+            emissiveIntensity: 0.8,
+            metalness: 0,
+            roughness: 0.2
+        });
+
+        // Electron material
+        const electronMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        // FCC Lattice constant
+        const a = 1.8; // lattice constant
+        const atoms = [];
+        const electrons = [];
+        const bonds = [];
+        const nucleiGroup = new THREE.Group();
+        const electronGroup = new THREE.Group();
+        const bondGroup = new THREE.Group();
+
+        // Create FCC lattice positions (4 atoms per unit cell)
+        function getFCCPositions(cx, cy, cz, size) {
+            const positions = [];
+            const half = size / 2;
+            for (let x = -half; x <= half; x++) {
+                for (let y = -half; y <= half; y++) {
+                    for (let z = -half; z <= half; z++) {
+                        // Corner
+                        positions.push({ x: cx + x * a, y: cy + y * a, z: cz + z * a, type: 'corner' });
+                        // Face centers
+                        if (x < half) positions.push({ x: cx + (x + 0.5) * a, y: cy + y * a, z: cz + z * a, type: 'face' });
+                        if (y < half) positions.push({ x: cx + x * a, y: cy + (y + 0.5) * a, z: cz + z * a, type: 'face' });
+                        if (z < half) positions.push({ x: cx + x * a, y: cy + y * a, z: cz + (z + 0.5) * a, type: 'face' });
+                    }
+                }
+            }
+            return positions;
+        }
+
+        // Create nucleus mesh (small sphere with glow)
+        function createNucleus() {
+            const geo = new THREE.SphereGeometry(0.12, 16, 16);
+            const mesh = new THREE.Mesh(geo, nucleiMaterial);
+            return mesh;
+        }
+
+        // Create electron mesh
+        function createElectron() {
+            const geo = new THREE.SphereGeometry(0.06, 12, 12);
+            const mesh = new THREE.Mesh(geo, electronMaterial.clone());
+            return mesh;
+        }
+
+        // Create bond cylinder
+        function createBond() {
+            const geo = new THREE.CylinderGeometry(0.02, 0.02, 1, 8);
+            const mat = new THREE.MeshBasicMaterial({ 
+                color: 0x88ccff, 
+                transparent: true, 
+                opacity: 0.4 
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            return mesh;
+        }
+
+        // FCC lattice - create 3x3x3 supercell
+        const latticeSize = 3;
+        const atomPositions = getFCCPositions(0, 0, 0, latticeSize);
+
+        // Create nuclei
+        atomPositions.forEach((pos, i) => {
+            const nucleus = createNucleus();
+            nucleus.position.set(pos.x, pos.y, pos.z);
+            
+            // Store original (diamond) position and random atomic position
+            nucleus.userData = {
+                diamondPos: new THREE.Vector3(pos.x, pos.y, pos.z),
+                atomicPos: new THREE.Vector3(
+                    pos.x + (Math.random() - 0.5) * 3,
+                    pos.y + (Math.random() - 0.5) * 3,
+                    pos.z + (Math.random() - 0.5) * 3
+                ),
+                atomicVelocity: new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.02,
+                    (Math.random() - 0.5) * 0.02,
+                    (Math.random() - 0.5) * 0.02
+                ),
+                phase: Math.random() * Math.PI * 2
+            };
+            
+            atoms.push(nucleus);
+            nucleiGroup.add(nucleus);
+        });
+
+        // Create electrons (2 per atom for covalent bonds)
+        const bondDirections = [
+            new THREE.Vector3(1, 0, 0),
+            new THREE.Vector3(-1, 0, 0),
+            new THREE.Vector3(0, 1, 0),
+            new THREE.Vector3(0, -1, 0),
+            new THREE.Vector3(0, 0, 1),
+            new THREE.Vector3(0, 0, -1)
+        ];
+
+        atoms.forEach((atom, i) => {
+            // 4 electrons for diamond bonding
+            for (let j = 0; j < 4; j++) {
+                const electron = createElectron();
+                const dir = bondDirections[j].clone();
+                const offset = dir.clone().multiplyScalar(a * 0.5);
+                
+                electron.position.copy(atom.position).add(offset);
+                
+                electron.userData = {
+                    hostAtom: i,
+                    bondDir: dir,
+                    phase: Math.random() * Math.PI * 2,
+                    orbitRadius: 0.4 + Math.random() * 0.2,
+                    speed: 1 + Math.random() * 0.5
+                };
+                
+                electrons.push(electron);
+                electronGroup.add(electron);
+            }
+        });
+
+        // Create bonds between adjacent atoms
+        for (let i = 0; i < atoms.length; i++) {
+            for (let j = i + 1; j < atoms.length; j++) {
+                const dist = atoms[i].userData.diamondPos.distanceTo(atoms[j].userData.diamondPos);
+                if (Math.abs(dist - a) < 0.1) {
+                    const bond = createBond();
+                    bond.userData = {
+                        atom1: i,
+                        atom2: j,
+                        diamondPos1: atoms[i].userData.diamondPos.clone(),
+                        diamondPos2: atoms[j].userData.diamondPos.clone()
+                    };
+                    bonds.push(bond);
+                    bondGroup.add(bond);
+                }
+            }
+        }
+
+        scene.add(nucleiGroup);
+        scene.add(electronGroup);
+        scene.add(bondGroup);
+
+        // UI elements
+        const stateEl = document.getElementById('state-name');
+        const progressEl = document.getElementById('progress-fill');
+
+        // Scroll handling
+        window.addEventListener('wheel', (e) => {
+            targetMorph += e.deltaY * 0.0003;
+            targetMorph = Math.max(0, Math.min(1, targetMorph));
+        });
+
+        // Touch handling
+        let touchStartY = 0;
+        window.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; });
+        window.addEventListener('touchmove', (e) => {
+            const delta = (touchStartY - e.touches[0].clientY) * 0.001;
+            targetMorph += delta;
+            targetMorph = Math.max(0, Math.min(1, targetMorph));
+            touchStartY = e.touches[0].clientY;
+        });
+
+        // Lerp helper
+        function lerp(a, b, t) { return a + (b - a) * t; }
+        function lerpVec3(v1, v2, t, out) {
+            out.x = lerp(v1.x, v2.x, t);
+            out.y = lerp(v1.y, v2.y, t);
+            out.z = lerp(v1.z, v2.z, t);
+        }
+
+        // Animation
+        const clock = new THREE.Clock();
+        let time = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            time += delta;
+
+            // Lerp morph
+            morphProgress += (targetMorph - morphProgress) * 0.03;
+
+            // Update UI
+            const isDiamond = morphProgress > 0.5;
+            stateEl.textContent = isDiamond ? 'DIAMOND' : 'ATOMIC';
+            stateEl.classList.toggle('diamond', isDiamond);
+            progressEl.style.width = `${morphProgress * 100}%`;
+
+            // Animate nuclei
+            atoms.forEach((atom, i) => {
+                const ud = atom.userData;
+                
+                if (morphProgress < 0.1) {
+                    // Pure atomic chaos
+                    ud.atomicPos.add(ud.atomicVelocity);
+                    const center = new THREE.Vector3(0, 0, 0);
+                    const dist = ud.atomicPos.distanceTo(center);
+                    if (dist > 5) {
+                        ud.atomicVelocity.multiplyScalar(-0.9);
+                    }
+                    atom.position.copy(ud.atomicPos);
+                } else if (morphProgress > 0.9) {
+                    // Pure diamond lattice
+                    atom.position.copy(ud.diamondPos);
+                } else {
+                    // Morphing - add vibration
+                    const vibFreq = 10;
+                    const vibAmp = 0.05 * (1 - morphProgress);
+                    const vib = new THREE.Vector3(
+                        Math.sin(time * vibFreq + ud.phase) * vibAmp,
+                        Math.cos(time * vibFreq + ud.phase) * vibAmp,
+                        Math.sin(time * vibFreq * 1.3 + ud.phase) * vibAmp
+                    );
+                    
+                    const morphedPos = new THREE.Vector3();
+                    lerpVec3(ud.atomicPos, ud.diamondPos, morphProgress, morphedPos);
+                    atom.position.copy(morphedPos).add(vib);
+                }
+            });
+
+            // Animate electrons
+            electrons.forEach((electron, i) => {
+                const ud = electron.userData;
+                const hostAtom = atoms[ud.hostAtom];
+                
+                if (morphProgress < 0.2) {
+                    // Free orbital in atomic state
+                    const angle1 = time * ud.speed + ud.phase;
+                    const angle2 = time * ud.speed * 0.7 + ud.phase;
+                    electron.position.set(
+                        hostAtom.position.x + Math.cos(angle1) * ud.orbitRadius * 2,
+                        hostAtom.position.y + Math.sin(angle2) * ud.orbitRadius * 2,
+                        hostAtom.position.z + Math.sin(angle1 + angle2) * ud.orbitRadius
+                    );
+                    electron.material.opacity = 0.6 + Math.sin(time * 5 + ud.phase) * 0.3;
+                } else if (morphProgress > 0.8) {
+                    // On bond path in diamond state
+                    const bondOffset = (Math.sin(time * 3 + ud.phase) * 0.5 + 0.5);
+                    const bondVec = ud.bondDir.clone().multiplyScalar(bondOffset * a);
+                    electron.position.copy(hostAtom.position).add(bondVec);
+                    
+                    // Pulse color based on position
+                    const hue = (bondOffset * 0.3 + time * 0.1) % 1;
+                    electron.material.color.setHSL(hue, 1, 0.6);
+                    electron.material.opacity = 0.9;
+                } else {
+                    // Transitioning
+                    const bondOffset = (Math.sin(time * 3 + ud.phase) * 0.5 + 0.5);
+                    const bondVec = ud.bondDir.clone().multiplyScalar(bondOffset * a);
+                    const atomicPos = new THREE.Vector3(
+                        hostAtom.position.x + Math.cos(time * ud.speed + ud.phase) * ud.orbitRadius,
+                        hostAtom.position.y + Math.sin(time * ud.speed * 0.8 + ud.phase) * ud.orbitRadius,
+                        hostAtom.position.z + Math.sin(time * ud.speed + ud.phase) * ud.orbitRadius
+                    );
+                    
+                    electron.position.lerpVectors(atomicPos, hostAtom.position.clone().add(bondVec), morphProgress);
+                    electron.material.opacity = lerp(0.7, 0.9, morphProgress);
+                }
+            });
+
+            // Update bonds
+            bonds.forEach((bond, i) => {
+                const ud = bond.userData;
+                const pos1 = atoms[ud.atom1].position;
+                const pos2 = atoms[ud.atom2].position;
+                
+                // Position bond at midpoint
+                bond.position.lerpVectors(pos1, pos2, 0.5);
+                
+                // Scale bond to connect atoms
+                const length = pos1.distanceTo(pos2);
+                bond.scale.y = length;
+                
+                // Orient bond
+                bond.lookAt(pos2);
+                bond.rotateX(Math.PI / 2);
+                
+                // Opacity based on morph
+                bond.material.opacity = morphProgress * 0.6;
+            });
+
+            // Animate lights
+            spot1.position.x = Math.sin(time * 0.3) * 12;
+            spot1.position.z = Math.cos(time * 0.3) * 12;
+            
+            spot2.position.x = Math.cos(time * 0.2) * 10;
+            spot2.position.y = Math.sin(time * 0.25) * -8;
+
+            controls.update();
+            composer.render();
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Hide loading
+        setTimeout(() => {
+            document.getElementById('loading').classList.add('hidden');
+        }, 2000);
+
+        animate();
+    </script>
+</body>
+</html>
